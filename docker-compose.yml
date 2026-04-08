@@ -1,0 +1,61 @@
+version: '3'
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chatwoot
+      POSTGRES_PASSWORD: chatwoot_pass
+      POSTGRES_DB: chatwoot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+  chatwoot:
+    image: chatwoot/chatwoot:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      RAILS_ENV: production
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
+      DEFAULT_LOCALE: ru
+      DATABASE_URL: postgres://chatwoot:chatwoot_pass@postgres:5432/chatwoot
+      REDIS_URL: redis://redis:6379
+      RAILS_LOG_TO_STDOUT: 'true'
+    ports:
+      - "3001:3000"
+    volumes:
+      - chatwoot_storage:/app/storage
+    command: bundle exec rails server -b 0.0.0.0 -p 3000
+  sidekiq:
+    image: chatwoot/chatwoot:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      RAILS_ENV: production
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      DATABASE_URL: postgres://chatwoot:chatwoot_pass@postgres:5432/chatwoot
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - chatwoot_storage:/app/storage
+    command: bundle exec sidekiq
+  bridge:
+    build: ./bridge
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CHATWOOT_URL: http://chatwoot:3000
+    ports:
+      - "3002:3000"
+volumes:
+  postgres_data:
+  redis_data:
+  chatwoot_storage:
