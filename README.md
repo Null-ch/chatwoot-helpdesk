@@ -27,6 +27,11 @@ cp .env.example .env
 - `FRONTEND_URL` (по умолчанию уже `http://localhost:3001`)
 - `MAX_TOKEN`, `CHATWOOT_TOKEN`, `CHATWOOT_ACCOUNT`, `CHATWOOT_INBOX_ID`
 
+Важно: если вы копировали `.env` вручную, проверьте, что строка выглядит так (без “склейки”):
+```
+CHATWOOT_URL=http://chatwoot:3000
+```
+
 3) Первый запуск (инициализация БД — один раз):
 
 ```bash
