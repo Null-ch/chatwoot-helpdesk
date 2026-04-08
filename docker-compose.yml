@@ -28,7 +28,7 @@ services:
       REDIS_URL: redis://redis:6379
       RAILS_LOG_TO_STDOUT: 'true'
     ports:
-      - "3001:3000"
+      - "${CHATWOOT_PORT:-3001}:3000"
     volumes:
       - chatwoot_storage:/app/storage
     command: bundle exec rails server -b 0.0.0.0 -p 3000
@@ -53,7 +53,7 @@ services:
     environment:
       CHATWOOT_URL: http://chatwoot:3000
     ports:
-      - "3002:3000"
+      - "${BRIDGE_PORT:-3002}:3000"
 volumes:
   postgres_data:
   redis_data:

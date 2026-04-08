@@ -26,6 +26,7 @@ cp .env.example .env
 - `SECRET_KEY_BASE` (сгенерируйте `openssl rand -hex 32`)
 - `FRONTEND_URL` (по умолчанию уже `http://localhost:3001`)
 - `MAX_TOKEN`, `CHATWOOT_TOKEN`, `CHATWOOT_ACCOUNT`, `CHATWOOT_INBOX_ID`
+ - если порт 3001 занят — поменяйте `CHATWOOT_PORT` (и `FRONTEND_URL`) на свободный, например `3005`
 
 Важно: если вы копировали `.env` вручную, проверьте, что строка выглядит так (без “склейки”):
 ```
@@ -49,6 +50,22 @@ docker compose up -d bridge
 
 ```bash
 http://localhost:3001
+```
+
+### Если получили “port is already allocated”
+Это значит, что порт на сервере уже занят (часто — старыми контейнерами).
+
+Быстрый вариант (остановить старые контейнеры этого проекта):
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+Альтернатива (не трогая старые сервисы): смените порт в `.env`, например:
+```
+CHATWOOT_PORT=3005
+FRONTEND_URL=http://localhost:3005
 ```
 
 ---
