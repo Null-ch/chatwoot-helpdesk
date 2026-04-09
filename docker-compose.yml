@@ -41,20 +41,26 @@ services:
     environment:
       RAILS_ENV: production
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
       DATABASE_URL: postgres://chatwoot:chatwoot_pass@postgres:5432/chatwoot
       REDIS_URL: redis://redis:6379
     volumes:
       - chatwoot_storage:/app/storage
     command: bundle exec sidekiq
   bridge:
-    build: ./bridge
+    build: .
     restart: unless-stopped
     env_file: .env
     environment:
       CHATWOOT_URL: http://chatwoot:3000
+    volumes:
+      - ./src:/app/src
+      - ./index.js:/app/index.js
+      - bridge_state:/tmp
     ports:
       - "${BRIDGE_PORT:-3002}:3000"
 volumes:
   postgres_data:
   redis_data:
   chatwoot_storage:
+  bridge_state:

@@ -110,7 +110,7 @@ docker --version
 # Создайте папку и скопируйте все файлы из архива
 mkdir -p /opt/max-support
 cd /opt/max-support
-# Скопируйте сюда: docker-compose.yml, .env, папку bridge/
+# Скопируйте сюда: docker-compose.yml, .env, Dockerfile, package.json, index.js и папку src/
 ```
 
 Если копируете со своего компьютера через scp:
@@ -265,8 +265,8 @@ docker compose up -d chatwoot sidekiq
 max-support/
   docker-compose.yml   ← главный файл, запускает всё
   .env                 ← токены и настройки (не публиковать!)
-  bridge/
-    index.js           ← код моста MAX ↔ Chatwoot
-    package.json
-    Dockerfile
+  Dockerfile           ← сборка bridge-сервиса
+  package.json
+  index.js             ← код моста MAX ↔ Chatwoot
+  src/
 ```
