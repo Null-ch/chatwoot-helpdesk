@@ -7,10 +7,11 @@ const { normalizeText } = require('../../utils/content');
 const { getAttachmentUrl, rewriteToInternalChatwootUrl } = require('../../utils/attachments');
 
 class MaxAdapter {
-  constructor({ maxClient, chatwootClient, state }) {
+  constructor({ maxClient, chatwootClient, state, metadataStore }) {
     this.max = maxClient;
     this.cw = chatwootClient;
     this.state = state;
+    this.metadataStore = metadataStore || null;
   }
 
   name() { return 'max'; }
@@ -48,18 +49,53 @@ class MaxAdapter {
     if (msg?.sender?.is_bot) return;
 
     const sender = msg.sender;
-    const chat = msg?.recipient;
+    const chat = msg?.recipient || msg?.chat || update?.chat || null;
     const userId = sender?.user_id || sender?.id || null;
-    const chatId = chat?.chat_id || null;
-    const chatType = chat?.chat_type || 'dialog';
+    const chatId =
+      chat?.chat_id ||
+      chat?.id ||
+      msg?.chat_id ||
+      msg?.recipient_chat_id ||
+      update?.chat_id ||
+      null;
+    const chatType =
+      chat?.chat_type ||
+      chat?.type ||
+      msg?.chat_type ||
+      update?.chat_type ||
+      'dialog';
     const isGroup = chatType !== 'dialog';
     if (!userId && !chatId) return;
 
     const userName = sender?.name || `Пользователь ${userId || chatId}`;
-    let text = normalizeText(msg?.body?.text || '');
+    let text = normalizeText(
+      msg?.body?.text ||
+      msg?.body?.caption ||
+      msg?.body?.text?.text ||
+      msg?.text ||
+      update?.text ||
+      ''
+    );
     const mid = msg?.body?.mid;
-    const attachments = Array.isArray(msg?.body?.attachments) ? msg.body.attachments : [];
-    if (!text && attachments.length === 0) return;
+    const replyToMid = this._extractReplyMid(msg, update);
+    const replyTarget = replyToMid ? this.state.maxMidToCwMessageMap.map.get(String(replyToMid)) : null;
+    const inReplyTo = replyTarget?.messageId ? Number(replyTarget.messageId) : null;
+    if (replyToMid && !inReplyTo) {
+      console.log('[MAX->CW REPLY] mapping not found', { convId, replyToMid });
+    }
+    const attachments = this._extractAttachments(msg, update);
+    if (!text && attachments.length === 0) {
+      console.log('[MAX->CW] skipped message without text/attachments', {
+        updateType: update?.update_type,
+        hasMessage: !!msg,
+        hasBody: !!msg?.body,
+        hasRecipient: !!msg?.recipient,
+        hasChat: !!msg?.chat,
+        chatId,
+        userId
+      });
+      return;
+    }
 
     if (update?.update_type === 'message_callback') {
       const cb = normalizeText(update?.callback?.payload || '') || normalizeText(update?.callback?.data || '') || normalizeText(update?.callback?.text || '');
@@ -102,10 +138,16 @@ class MaxAdapter {
       for (const att of attachments) {
         const url = getAttachmentUrl(att);
         if (!url) continue;
-        const ok = await this._sendMediaToChatwoot(convId, url, att.type, prefix + (text || ''));
+        const ok = await this._sendMediaToChatwoot(convId, url, att.type, prefix + (text || ''), inReplyTo);
         if (!ok) {
           try {
-            await this.cw.createMessage(convId, { content: `${prefix}${text ? text + '\n' : ''}${url}`, message_type: 'incoming', private: false });
+            const created = await this.cw.createMessage(convId, {
+              content: `${prefix}${text ? text + '\n' : ''}${url}`,
+              message_type: 'incoming',
+              private: false,
+              content_attributes: inReplyTo ? { in_reply_to: inReplyTo } : undefined
+            });
+            await this._annotateMessage(created?.id, 'incoming', 'max');
           } catch (_) {}
         }
       }
@@ -114,7 +156,13 @@ class MaxAdapter {
 
     if (text) {
       try {
-        const created = await this.cw.createMessage(convId, { content: prefix + text, message_type: 'incoming', private: false });
+        const created = await this.cw.createMessage(convId, {
+          content: prefix + text,
+          message_type: 'incoming',
+          private: false,
+          content_attributes: inReplyTo ? { in_reply_to: inReplyTo } : undefined
+        });
+        await this._annotateMessage(created?.id, 'incoming', 'max');
         if (mid && created?.id) {
           this.state.maxMidToCwMessageMap.map.set(String(mid), { convId: Number(convId), messageId: Number(created.id) });
           this.state.maxMidToCwMessageMap.save();
@@ -125,25 +173,49 @@ class MaxAdapter {
     }
   }
 
+  _extractAttachments(msg, update) {
+    const candidates = [
+      msg?.body?.attachments,
+      msg?.attachments,
+      update?.attachments,
+      update?.message?.attachments,
+      update?.body?.attachments
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate) && candidate.length > 0) return candidate;
+    }
+    return [];
+  }
+
   async send(target, message) {
     const text = normalizeText(message?.text || '');
     const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
     const replyMid = message?.replyTo?.mid || null;
+    const sourceMessageId = message?.sourceMessageId || null;
+    const sourceConvId = message?.sourceConvId || null;
     const chatId = target?.chatId || null;
     const userId = target?.userId || null;
 
     if (attachments.length === 0) {
       if (!text) return;
-      await this.max.sendMessage({ chatId, userId, text, replyMid });
+      const sent = await this.max.sendMessage({ chatId, userId, text, replyMid });
+      this._rememberOutgoingMid(sent, sourceConvId, sourceMessageId);
       return;
     }
 
     console.log('[CW->MAX] sending attachments', { chatId, userId, count: attachments.length, hasText: !!text });
     let hadErrors = false;
     let first = true;
+    let firstSent = null;
     for (const att of attachments) {
       try {
-        await this._sendAttachmentToMax({ target: { chatId, userId }, att, caption: first ? text : '', replyMid: first ? replyMid : null });
+        const sent = await this._sendAttachmentToMax({
+          target: { chatId, userId },
+          att,
+          caption: first ? text : '',
+          replyMid: first ? replyMid : null
+        });
+        if (first && sent) firstSent = sent;
       } catch (err) {
         console.error('[CW->MAX MEDIA ERROR]', err.response?.status, err.response?.data || err.message);
         // Do not send attachment URL fallback to MAX:
@@ -155,6 +227,7 @@ class MaxAdapter {
     if (hadErrors) {
       throw new Error('One or more attachments failed to send to MAX');
     }
+    this._rememberOutgoingMid(firstSent, sourceConvId, sourceMessageId);
   }
 
   async _getChatTitle(chatId) {
@@ -267,16 +340,16 @@ class MaxAdapter {
     }
   }
 
-  async _sendMediaToChatwoot(convId, fileUrl, type, caption) {
+  async _sendMediaToChatwoot(convId, fileUrl, type, caption, inReplyTo) {
     try {
       const primaryUrl = String(fileUrl);
       const rewrittenUrl = rewriteToInternalChatwootUrl(primaryUrl);
       let fileRes;
       try {
-        fileRes = await axios.get(primaryUrl, { responseType: 'arraybuffer', timeout: 30000 });
+        fileRes = await axios.get(primaryUrl, { responseType: 'arraybuffer', timeout: 30000, maxRedirects: 0 });
       } catch (e) {
         if (rewrittenUrl && rewrittenUrl !== primaryUrl) {
-          fileRes = await axios.get(rewrittenUrl, { responseType: 'arraybuffer', timeout: 30000 });
+          fileRes = await axios.get(rewrittenUrl, { responseType: 'arraybuffer', timeout: 30000, maxRedirects: 0 });
         } else {
           throw e;
         }
@@ -287,13 +360,15 @@ class MaxAdapter {
       form.append('content', caption || '');
       form.append('message_type', 'incoming');
       form.append('private', 'false');
+      if (inReplyTo) form.append('content_attributes', JSON.stringify({ in_reply_to: Number(inReplyTo) }));
       form.append('attachments[]', fileRes.data, {
         filename,
         contentType
       });
       await axios.post(`${this.cw.baseUrl}/api/v1/accounts/${this.cw.accountId}/conversations/${convId}/messages`, form, {
         headers: { ...form.getHeaders(), api_access_token: process.env.CHATWOOT_TOKEN },
-        timeout: 30000
+        timeout: 30000,
+        maxRedirects: 0
       });
       return true;
     } catch (err) {
@@ -315,10 +390,10 @@ class MaxAdapter {
     const rewrittenUrl = rewriteToInternalChatwootUrl(primaryUrl);
     let fileRes;
     try {
-      fileRes = await axios.get(primaryUrl, { responseType: 'arraybuffer', timeout: 30000 });
+      fileRes = await axios.get(primaryUrl, { responseType: 'arraybuffer', timeout: 30000, maxRedirects: 0 });
     } catch (e) {
       if (rewrittenUrl && rewrittenUrl !== primaryUrl) {
-        fileRes = await axios.get(rewrittenUrl, { responseType: 'arraybuffer', timeout: 30000 });
+        fileRes = await axios.get(rewrittenUrl, { responseType: 'arraybuffer', timeout: 30000, maxRedirects: 0 });
       } else {
         throw e;
       }
@@ -335,7 +410,7 @@ class MaxAdapter {
       contentType
     });
     console.log('[CW->MAX] upload done', { uploadType, token: uploaded?.token ? 'yes' : 'no' });
-    await this.max.sendMessageWithAttachments({
+    const sent = await this.max.sendMessageWithAttachments({
       chatId: target?.chatId || null,
       userId: target?.userId || null,
       text: caption || '',
@@ -343,6 +418,7 @@ class MaxAdapter {
       attachments: [{ type: uploadType, payload: uploaded.payload }]
     });
     console.log('[CW->MAX] message with attachment sent', { uploadType });
+    return sent;
   }
 
   _inferUploadType(att, contentType) {
@@ -378,6 +454,66 @@ class MaxAdapter {
     } catch (_) {}
     const t = this._inferUploadType({ type: fallbackType }, null);
     return `attachment.${extByType[t] || 'bin'}`;
+  }
+
+  async _annotateMessage(messageId, direction, platform) {
+    if (!this.metadataStore || !messageId) return;
+    try {
+      await this.metadataStore.annotateMessage(messageId, { direction, platform });
+    } catch (err) {
+      console.error('[MAX->CW META ERROR]', err.message);
+    }
+  }
+
+  _extractReplyMid(msg, update) {
+    return (
+      msg?.body?.link?.mid ||
+      msg?.body?.reply_to?.mid ||
+      msg?.body?.reply_message?.body?.mid ||
+      msg?.link?.mid ||
+      msg?.reply_to?.mid ||
+      msg?.reply_message?.body?.mid ||
+      update?.message?.body?.link?.mid ||
+      update?.message?.body?.reply_to?.mid ||
+      update?.message?.body?.reply_message?.body?.mid ||
+      update?.body?.link?.mid ||
+      update?.body?.reply_to?.mid ||
+      update?.body?.reply_message?.body?.mid ||
+      update?.link?.mid ||
+      update?.reply_to?.mid ||
+      update?.reply_message?.body?.mid ||
+      null
+    );
+  }
+
+  _extractSentMid(sent) {
+    return (
+      sent?.message?.body?.mid ||
+      sent?.message?.mid ||
+      sent?.messages?.[0]?.body?.mid ||
+      sent?.messages?.[0]?.mid ||
+      sent?.result?.message?.body?.mid ||
+      sent?.result?.message?.mid ||
+      sent?.result?.messages?.[0]?.body?.mid ||
+      sent?.result?.messages?.[0]?.mid ||
+      sent?.body?.mid ||
+      sent?.mid ||
+      null
+    );
+  }
+
+  _rememberOutgoingMid(sent, convId, messageId) {
+    if (!convId || !messageId) return;
+    const mid = this._extractSentMid(sent);
+    if (!mid) {
+      console.log('[CW->MAX REPLY] sent mid not found for mapping', { convId, messageId });
+      return;
+    }
+    this.state.maxMidToCwMessageMap.map.set(String(mid), {
+      convId: Number(convId),
+      messageId: Number(messageId)
+    });
+    this.state.maxMidToCwMessageMap.save();
   }
 }
 

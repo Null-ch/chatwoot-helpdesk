@@ -11,6 +11,7 @@
  
      this.http = axios.create({
        baseURL: `${baseUrl}/api/v1/accounts/${accountId}`,
+      maxRedirects: 0,
        headers: {
          api_access_token: accessToken,
          'Content-Type': 'application/json'
@@ -48,12 +49,16 @@
      await this.http.patch(`/conversations/${convId}`, patch);
    }
  
-   async createMessage(convId, { content, message_type, private: isPrivate }) {
-    const res = await this.http.post(`/conversations/${convId}/messages`, {
+  async createMessage(convId, { content, message_type, private: isPrivate, content_attributes }) {
+   const payload = {
        content,
        message_type,
        private: !!isPrivate
-     });
+    };
+   if (content_attributes && typeof content_attributes === 'object') {
+     payload.content_attributes = content_attributes;
+   }
+   const res = await this.http.post(`/conversations/${convId}/messages`, payload);
     return { id: res.data?.id };
    }
  
@@ -73,7 +78,7 @@
           content: patch?.content ?? ''
         }
       },
-      { headers: { 'Content-Type': 'application/json' } }
+      { headers: { 'Content-Type': 'application/json' }, maxRedirects: 0 }
     );
     return res.data;
   }

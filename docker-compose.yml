@@ -53,14 +53,36 @@ services:
     env_file: .env
     environment:
       CHATWOOT_URL: http://chatwoot:3000
+      NODE_OPTIONS: --trace-warnings
     volumes:
       - ./src:/app/src
       - ./index.js:/app/index.js
       - bridge_state:/tmp
     ports:
       - "${BRIDGE_PORT:-3002}:3000"
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@webbor3mj.ru
+      PGADMIN_DEFAULT_PASSWORD: "q*usjXi)"
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_REPLACE_SERVERS_ON_STARTUP: "True"
+      # For setups with dockerized reverse-proxy by virtual host labels
+      VIRTUAL_HOST: cw-pgadmin.webbor3mj.ru
+      VIRTUAL_PORT: 80
+      LETSENCRYPT_HOST: cw-pgadmin.webbor3mj.ru
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin-servers.json:/pgadmin4/servers.json:ro
 volumes:
   postgres_data:
   redis_data:
   chatwoot_storage:
   bridge_state:
+  pgadmin_data:

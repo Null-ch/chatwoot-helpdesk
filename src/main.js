@@ -7,6 +7,7 @@
  const { MaxAdapter } = require('./platforms/max/maxAdapter');
  const { BridgeCore } = require('./bridge/bridgeCore');
  const { createServer } = require('./server');
+const { MessageMetadataStore } = require('./storage/messageMetadataStore');
  
  async function main() {
    const state = createState();
@@ -24,6 +25,7 @@
    const maxToken = optional('MAX_TOKEN');
    const maxApiUrl = optional('MAX_API_URL', 'https://botapi.max.ru');
    const maxWebhookSecret = optional('MAX_WEBHOOK_SECRET', '');
+  const postgresUrl = optional('DATABASE_URL', 'postgres://chatwoot:chatwoot_pass@postgres:5432/chatwoot');
  
    const cw = new ChatwootClient({
      baseUrl: chatwootUrl,
@@ -32,10 +34,12 @@
      inboxId: chatwootInboxId
    });
  
+  const metadataStore = new MessageMetadataStore({ connectionString: postgresUrl });
+
    const maxClient = new MaxClient({ baseUrl: maxApiUrl, token: maxToken });
-   const maxAdapter = new MaxAdapter({ maxClient, chatwootClient: cw, state });
+  const maxAdapter = new MaxAdapter({ maxClient, chatwootClient: cw, state, metadataStore });
  
-   const bridgeCore = new BridgeCore({ helpdesk: cw, platform: maxAdapter, state });
+  const bridgeCore = new BridgeCore({ helpdesk: cw, platform: maxAdapter, state, metadataStore });
  
    const app = createServer({ bridgeCore, maxWebhookSecret });
  

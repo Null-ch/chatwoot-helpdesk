@@ -7,6 +7,7 @@ const FormData = require('form-data');
    constructor({ baseUrl, token }) {
      this.http = axios.create({
        baseURL: baseUrl,
+      maxRedirects: 0,
        headers: { Authorization: token }
      });
    }
@@ -31,7 +32,7 @@ const FormData = require('form-data');
     if (Array.isArray(attachments) && attachments.length > 0) body.attachments = attachments;
 
     const params = chatId ? { chat_id: chatId } : { user_id: userId };
-    await this._postMessageWithRetry(body, params);
+    return this._postMessageWithRetry(body, params);
   }
 
   async uploadBinary({ uploadType, buffer, filename, contentType }) {
@@ -53,6 +54,7 @@ const FormData = require('form-data');
     const sent = await axios.post(uploadUrl, form, {
       headers: form.getHeaders(),
       timeout: 60000,
+      maxRedirects: 0,
       maxBodyLength: Infinity,
       maxContentLength: Infinity
     });
@@ -86,8 +88,8 @@ const FormData = require('form-data');
     for (const delay of delays) {
       if (delay > 0) await sleep(delay);
       try {
-        await this.http.post('/messages', body, { params, timeout: 30000 });
-        return;
+        const res = await this.http.post('/messages', body, { params, timeout: 30000 });
+        return res?.data;
       } catch (err) {
         lastErr = err;
         const code = err?.response?.data?.code;

@@ -1,12 +1,14 @@
  'use strict';
  
  const { normalizeText } = require('../utils/content');
+const { resolveDirection, resolvePlatform } = require('./platformResolver');
  
  class BridgeCore {
-   constructor({ helpdesk, platform, state }) {
+  constructor({ helpdesk, platform, state, metadataStore }) {
      this.helpdesk = helpdesk;
      this.platform = platform;
      this.state = state;
+    this.metadataStore = metadataStore || null;
    }
  
    async handlePlatformWebhook(body) {
@@ -25,12 +27,18 @@
    }
  
    async handleChatwootWebhook(body) {
-     const { event, message_type, content, conversation, content_attributes, attachments: webhookAttachments } = body || {};
-     if (event !== 'message_created' || message_type !== 'outgoing') return;
+    const { event, message_type, content, conversation, content_attributes, attachments: webhookAttachments, private: isPrivate } = body || {};
+    if (event !== 'message_created') return;
  
      const convId = conversation?.id;
      const msgId = body?.id;
      if (!convId || msgId === undefined || msgId === null) return;
+    const direction = resolveDirection(message_type);
+    const platform = resolvePlatform({ conversation, fallback: this.platform?.name?.() || 'web' });
+
+    await this._annotateMessage(msgId, { direction, platform });
+    if (direction !== 'outgoing') return;
+    if (isPrivate === true) return;
  
      let info = this.state.reverseMap.map.get(Number(convId));
  
@@ -80,7 +88,12 @@
        const state = this.state.processed.get(msgId);
  
       if (normalizedContent && !state.textSent && attachments.length === 0) {
-         await this.platform.send(info, { text: normalizedContent, replyTo: replyMid ? { mid: replyMid } : null });
+        await this.platform.send(info, {
+          text: normalizedContent,
+          replyTo: replyMid ? { mid: replyMid } : null,
+          sourceMessageId: msgId,
+          sourceConvId: convId
+        });
          this.state.processed.mark(msgId, { textSent: true });
        }
  
@@ -89,7 +102,9 @@
         await this.platform.send(info, {
           text: normalizedContent || '',
           attachments,
-          replyTo: replyMid ? { mid: replyMid } : null
+          replyTo: replyMid ? { mid: replyMid } : null,
+          sourceMessageId: msgId,
+          sourceConvId: convId
         });
         this.state.processed.mark(msgId, { attachmentsSent: true, textSent: true });
        } else if (attachments.length === 0) {
@@ -152,15 +167,28 @@
      const hasText = !!text;
      const hasAttachments = attachments.length > 0;
  
-     if (!hasText && !hasAttachments) return;
-     if (message?.message_type === 'incoming' || message?.message_type === 0) return;
+    if (!hasText && !hasAttachments) return;
+
+    const direction = resolveDirection(message?.message_type);
+    const platform = resolvePlatform({
+      conversation: { meta: { sender: { identifier: info?.chatKey } } },
+      fallback: this.platform?.name?.() || 'web'
+    });
+    await this._annotateMessage(msgId, { direction, platform });
+    if (direction === 'incoming') return;
+    if (message?.private === true) return;
  
      const state = this.state.processed.get(msgId);
      const isReply = !!(message?.content_attributes?.in_reply_to);
      const replyMid = isReply ? this.state.lastMidMap.get(String(convId)) : null;
  
     if (hasText && !state.textSent && !hasAttachments) {
-       await this.platform.send(info, { text, replyTo: replyMid ? { mid: replyMid } : null });
+      await this.platform.send(info, {
+        text,
+        replyTo: replyMid ? { mid: replyMid } : null,
+        sourceMessageId: msgId,
+        sourceConvId: convId
+      });
        this.state.processed.mark(msgId, { textSent: true });
        console.log('[CW POLL] text sent', { convId, msgId });
      }
@@ -170,13 +198,24 @@
       await this.platform.send(info, {
         text: text || '',
         attachments,
-        replyTo: replyMid ? { mid: replyMid } : null
+        replyTo: replyMid ? { mid: replyMid } : null,
+        sourceMessageId: msgId,
+        sourceConvId: convId
       });
       this.state.processed.mark(msgId, { attachmentsSent: true, textSent: true });
-     } else if (!hasAttachments) {
-       this.state.processed.mark(msgId, { attachmentsSent: true });
-     }
-   }
+    } else if (!hasAttachments) {
+      this.state.processed.mark(msgId, { attachmentsSent: true });
+    }
+  }
+
+  async _annotateMessage(messageId, payload) {
+    if (!this.metadataStore) return;
+    try {
+      await this.metadataStore.annotateMessage(messageId, payload);
+    } catch (err) {
+      console.error('[MESSAGES META ERROR]', err.message);
+    }
+  }
  }
  
  module.exports = {
